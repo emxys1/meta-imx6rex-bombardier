@@ -1,0 +1,25 @@
+From dd4c0479900e2cfcb6242f88edf0af9d50ec6fc7 Mon Sep 17 00:00:00 2001
+From: japalazon <japalazon@emxys.com>
+Date: Mon, 30 Mar 2015 15:15:53 +0200
+Subject: [PATCH] Initial change: Board name change
+
+---
+ arch/arm/boot/dts/imx6q-sabresd.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/imx6q-sabresd.dts b/arch/arm/boot/dts/imx6q-sabresd.dts
+index 5e5ff56..9c4d58f 100644
+--- a/arch/arm/boot/dts/imx6q-sabresd.dts
++++ b/arch/arm/boot/dts/imx6q-sabresd.dts
+@@ -16,7 +16,7 @@
+ #include "imx6qdl-sabresd.dtsi"
+ 
+ / {
+-	model = "Freescale i.MX6 Quad SABRE Smart Device Board";
++	model = "iMX6 Rex Development Baseboard";
+ 	compatible = "fsl,imx6q-sabresd", "fsl,imx6q";
+ };
+ 
+-- 
+1.9.1
+
