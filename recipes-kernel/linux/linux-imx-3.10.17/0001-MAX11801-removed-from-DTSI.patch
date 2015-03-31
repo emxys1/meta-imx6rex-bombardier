@@ -1,0 +1,768 @@
+From a5af4248e6d94e794e604fbac57515d921a0c9a8 Mon Sep 17 00:00:00 2001
+From: japalazon <japalazon@emxys.com>
+Date: Tue, 31 Mar 2015 11:28:00 +0200
+Subject: [PATCH] MAX11801 removed from DTSI
+
+---
+ arch/arm/boot/compressed/ashldi3.S  |  53 +++++++++
+ arch/arm/boot/compressed/hyp-stub.S | 217 ++++++++++++++++++++++++++++++++++++
+ kernel/hz.bc                        |   1 +
+ lib/oid_registry_data.c             | 163 +++++++++++++++++++++++++++
+ scripts/mod/devicetable-offsets.h   | 148 ++++++++++++++++++++++++
+ scripts/sortextable                 | Bin 0 -> 18397 bytes
+ 6 files changed, 582 insertions(+)
+ create mode 100644 arch/arm/boot/compressed/ashldi3.S
+ create mode 100644 arch/arm/boot/compressed/hyp-stub.S
+ create mode 100644 kernel/hz.bc
+ create mode 100644 lib/oid_registry_data.c
+ create mode 100644 scripts/mod/devicetable-offsets.h
+ create mode 100755 scripts/sortextable
+
+diff --git a/arch/arm/boot/compressed/ashldi3.S b/arch/arm/boot/compressed/ashldi3.S
+new file mode 100644
+index 0000000..638deb1
+--- /dev/null
++++ b/arch/arm/boot/compressed/ashldi3.S
+@@ -0,0 +1,53 @@
++/* Copyright 1995, 1996, 1998, 1999, 2000, 2003, 2004, 2005
++   Free Software Foundation, Inc.
++
++This file is free software; you can redistribute it and/or modify it
++under the terms of the GNU General Public License as published by the
++Free Software Foundation; either version 2, or (at your option) any
++later version.
++
++In addition to the permissions in the GNU General Public License, the
++Free Software Foundation gives you unlimited permission to link the
++compiled version of this file into combinations with other programs,
++and to distribute those combinations without any restriction coming
++from the use of this file.  (The General Public License restrictions
++do apply in other respects; for example, they cover modification of
++the file, and distribution when not linked into a combine
++executable.)
++
++This file is distributed in the hope that it will be useful, but
++WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; see the file COPYING.  If not, write to
++the Free Software Foundation, 51 Franklin Street, Fifth Floor,
++Boston, MA 02110-1301, USA.  */
++
++
++#include <linux/linkage.h>
++
++#ifdef __ARMEB__
++#define al r1
++#define ah r0
++#else
++#define al r0
++#define ah r1
++#endif
++
++ENTRY(__ashldi3)
++ENTRY(__aeabi_llsl)
++
++	subs	r3, r2, #32
++	rsb	ip, r2, #32
++	movmi	ah, ah, lsl r2
++	movpl	ah, al, lsl r3
++ ARM(	orrmi	ah, ah, al, lsr ip	)
++ THUMB(	lsrmi	r3, al, ip		)
++ THUMB(	orrmi	ah, ah, r3		)
++	mov	al, al, lsl r2
++	mov	pc, lr
++
++ENDPROC(__ashldi3)
++ENDPROC(__aeabi_llsl)
+diff --git a/arch/arm/boot/compressed/hyp-stub.S b/arch/arm/boot/compressed/hyp-stub.S
+new file mode 100644
+index 0000000..1315c4c
+--- /dev/null
++++ b/arch/arm/boot/compressed/hyp-stub.S
+@@ -0,0 +1,217 @@
++/*
++ * Copyright (c) 2012 Linaro Limited.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include <linux/init.h>
++#include <linux/linkage.h>
++#include <asm/assembler.h>
++#include <asm/virt.h>
++
++#ifndef ZIMAGE
++/*
++ * For the kernel proper, we need to find out the CPU boot mode long after
++ * boot, so we need to store it in a writable variable.
++ *
++ * This is not in .bss, because we set it sufficiently early that the boot-time
++ * zeroing of .bss would clobber it.
++ */
++.data
++ENTRY(__boot_cpu_mode)
++	.long	0
++.text
++
++	/*
++	 * Save the primary CPU boot mode. Requires 3 scratch registers.
++	 */
++	.macro	store_primary_cpu_mode	reg1, reg2, reg3
++	mrs	\reg1, cpsr
++	and	\reg1, \reg1, #MODE_MASK
++	adr	\reg2, .L__boot_cpu_mode_offset
++	ldr	\reg3, [\reg2]
++	str	\reg1, [\reg2, \reg3]
++	.endm
++
++	/*
++	 * Compare the current mode with the one saved on the primary CPU.
++	 * If they don't match, record that fact. The Z bit indicates
++	 * if there's a match or not.
++	 * Requires 3 additionnal scratch registers.
++	 */
++	.macro	compare_cpu_mode_with_primary mode, reg1, reg2, reg3
++	adr	\reg2, .L__boot_cpu_mode_offset
++	ldr	\reg3, [\reg2]
++	ldr	\reg1, [\reg2, \reg3]
++	cmp	\mode, \reg1		@ matches primary CPU boot mode?
++	orrne	r7, r7, #BOOT_CPU_MODE_MISMATCH
++	strne	r7, [r5, r6]		@ record what happened and give up
++	.endm
++
++#else	/* ZIMAGE */
++
++	.macro	store_primary_cpu_mode	reg1:req, reg2:req, reg3:req
++	.endm
++
++/*
++ * The zImage loader only runs on one CPU, so we don't bother with mult-CPU
++ * consistency checking:
++ */
++	.macro	compare_cpu_mode_with_primary mode, reg1, reg2, reg3
++	cmp	\mode, \mode
++	.endm
++
++#endif /* ZIMAGE */
++
++/*
++ * Hypervisor stub installation functions.
++ *
++ * These must be called with the MMU and D-cache off.
++ * They are not ABI compliant and are only intended to be called from the kernel
++ * entry points in head.S.
++ */
++@ Call this from the primary CPU
++ENTRY(__hyp_stub_install)
++	store_primary_cpu_mode	r4, r5, r6
++ENDPROC(__hyp_stub_install)
++
++	@ fall through...
++
++@ Secondary CPUs should call here
++ENTRY(__hyp_stub_install_secondary)
++	mrs	r4, cpsr
++	and	r4, r4, #MODE_MASK
++
++	/*
++	 * If the secondary has booted with a different mode, give up
++	 * immediately.
++	 */
++	compare_cpu_mode_with_primary	r4, r5, r6, r7
++	movne	pc, lr
++
++	/*
++	 * Once we have given up on one CPU, we do not try to install the
++	 * stub hypervisor on the remaining ones: because the saved boot mode
++	 * is modified, it can't compare equal to the CPSR mode field any
++	 * more.
++	 *
++	 * Otherwise...
++	 */
++
++	cmp	r4, #HYP_MODE
++	movne	pc, lr			@ give up if the CPU is not in HYP mode
++
++/*
++ * Configure HSCTLR to set correct exception endianness/instruction set
++ * state etc.
++ * Turn off all traps
++ * Eventually, CPU-specific code might be needed -- assume not for now
++ *
++ * This code relies on the "eret" instruction to synchronize the
++ * various coprocessor accesses. This is done when we switch to SVC
++ * (see safe_svcmode_maskall).
++ */
++	@ Now install the hypervisor stub:
++	adr	r7, __hyp_stub_vectors
++	mcr	p15, 4, r7, c12, c0, 0	@ set hypervisor vector base (HVBAR)
++
++	@ Disable all traps, so we don't get any nasty surprise
++	mov	r7, #0
++	mcr	p15, 4, r7, c1, c1, 0	@ HCR
++	mcr	p15, 4, r7, c1, c1, 2	@ HCPTR
++	mcr	p15, 4, r7, c1, c1, 3	@ HSTR
++
++THUMB(	orr	r7, #(1 << 30)	)	@ HSCTLR.TE
++#ifdef CONFIG_CPU_BIG_ENDIAN
++	orr	r7, #(1 << 9)		@ HSCTLR.EE
++#endif
++	mcr	p15, 4, r7, c1, c0, 0	@ HSCTLR
++
++	mrc	p15, 4, r7, c1, c1, 1	@ HDCR
++	and	r7, #0x1f		@ Preserve HPMN
++	mcr	p15, 4, r7, c1, c1, 1	@ HDCR
++
++#if !defined(ZIMAGE) && defined(CONFIG_ARM_ARCH_TIMER)
++	@ make CNTP_* and CNTPCT accessible from PL1
++	mrc	p15, 0, r7, c0, c1, 1	@ ID_PFR1
++	lsr	r7, #16
++	and	r7, #0xf
++	cmp	r7, #1
++	bne	1f
++	mrc	p15, 4, r7, c14, c1, 0	@ CNTHCTL
++	orr	r7, r7, #3		@ PL1PCEN | PL1PCTEN
++	mcr	p15, 4, r7, c14, c1, 0	@ CNTHCTL
++1:
++#endif
++
++	bx	lr			@ The boot CPU mode is left in r4.
++ENDPROC(__hyp_stub_install_secondary)
++
++__hyp_stub_do_trap:
++	cmp	r0, #-1
++	mrceq	p15, 4, r0, c12, c0, 0	@ get HVBAR
++	mcrne	p15, 4, r0, c12, c0, 0	@ set HVBAR
++	__ERET
++ENDPROC(__hyp_stub_do_trap)
++
++/*
++ * __hyp_set_vectors: Call this after boot to set the initial hypervisor
++ * vectors as part of hypervisor installation.  On an SMP system, this should
++ * be called on each CPU.
++ *
++ * r0 must be the physical address of the new vector table (which must lie in
++ * the bottom 4GB of physical address space.
++ *
++ * r0 must be 32-byte aligned.
++ *
++ * Before calling this, you must check that the stub hypervisor is installed
++ * everywhere, by waiting for any secondary CPUs to be brought up and then
++ * checking that BOOT_CPU_MODE_HAVE_HYP(__boot_cpu_mode) is true.
++ *
++ * If not, there is a pre-existing hypervisor, some CPUs failed to boot, or
++ * something else went wrong... in such cases, trying to install a new
++ * hypervisor is unlikely to work as desired.
++ *
++ * When you call into your shiny new hypervisor, sp_hyp will contain junk,
++ * so you will need to set that to something sensible at the new hypervisor's
++ * initialisation entry point.
++ */
++ENTRY(__hyp_get_vectors)
++	mov	r0, #-1
++ENDPROC(__hyp_get_vectors)
++	@ fall through
++ENTRY(__hyp_set_vectors)
++	__HVC(0)
++	mov	pc, lr
++ENDPROC(__hyp_set_vectors)
++
++#ifndef ZIMAGE
++.align 2
++.L__boot_cpu_mode_offset:
++	.long	__boot_cpu_mode - .
++#endif
++
++.align 5
++__hyp_stub_vectors:
++__hyp_stub_reset:	W(b)	.
++__hyp_stub_und:		W(b)	.
++__hyp_stub_svc:		W(b)	.
++__hyp_stub_pabort:	W(b)	.
++__hyp_stub_dabort:	W(b)	.
++__hyp_stub_trap:	W(b)	__hyp_stub_do_trap
++__hyp_stub_irq:		W(b)	.
++__hyp_stub_fiq:		W(b)	.
++ENDPROC(__hyp_stub_vectors)
++
+diff --git a/kernel/hz.bc b/kernel/hz.bc
+new file mode 100644
+index 0000000..40cbf0c
+--- /dev/null
++++ b/kernel/hz.bc
+@@ -0,0 +1 @@
++hz=100
+diff --git a/lib/oid_registry_data.c b/lib/oid_registry_data.c
+new file mode 100644
+index 0000000..aac3aa6
+--- /dev/null
++++ b/lib/oid_registry_data.c
+@@ -0,0 +1,163 @@
++/*
++ * Automatically generated by /home/emxys/Escritorio/fsl-community-bsp/build/tmp/work/imx6qsabresd-poky-linux-gnueabi/linux-imx/3.10.17-r0/git/lib/build_OID_registry.  Do not edit
++ */
++
++static const unsigned short oid_index[OID__NR + 1] = {
++	[OID_id_dsa_with_sha1] = 0,
++	[OID_id_dsa] = 7,
++	[OID_id_ecdsa_with_sha1] = 14,
++	[OID_id_ecPublicKey] = 21,
++	[OID_rsaEncryption] = 28,
++	[OID_md2WithRSAEncryption] = 37,
++	[OID_md3WithRSAEncryption] = 46,
++	[OID_md4WithRSAEncryption] = 55,
++	[OID_sha1WithRSAEncryption] = 64,
++	[OID_sha256WithRSAEncryption] = 73,
++	[OID_sha384WithRSAEncryption] = 82,
++	[OID_sha512WithRSAEncryption] = 91,
++	[OID_sha224WithRSAEncryption] = 100,
++	[OID_data] = 109,
++	[OID_signed_data] = 118,
++	[OID_email_address] = 127,
++	[OID_content_type] = 136,
++	[OID_messageDigest] = 145,
++	[OID_signingTime] = 154,
++	[OID_smimeCapabilites] = 163,
++	[OID_smimeAuthenticatedAttrs] = 172,
++	[OID_md2] = 183,
++	[OID_md4] = 191,
++	[OID_md5] = 199,
++	[OID_certAuthInfoAccess] = 207,
++	[OID_msOutlookExpress] = 215,
++	[OID_sha1] = 224,
++	[OID_commonName] = 229,
++	[OID_surname] = 232,
++	[OID_countryName] = 235,
++	[OID_locality] = 238,
++	[OID_stateOrProvinceName] = 241,
++	[OID_organizationName] = 244,
++	[OID_organizationUnitName] = 247,
++	[OID_title] = 250,
++	[OID_description] = 253,
++	[OID_name] = 256,
++	[OID_givenName] = 259,
++	[OID_initials] = 262,
++	[OID_generationalQualifier] = 265,
++	[OID_subjectKeyIdentifier] = 268,
++	[OID_keyUsage] = 271,
++	[OID_subjectAltName] = 274,
++	[OID_issuerAltName] = 277,
++	[OID_basicConstraints] = 280,
++	[OID_crlDistributionPoints] = 283,
++	[OID_certPolicies] = 286,
++	[OID_authorityKeyIdentifier] = 289,
++	[OID_extKeyUsage] = 292,
++	[OID__NR] = 295
++};
++
++static const unsigned char oid_data[295] = {
++	42, 134, 72, 206, 46, 4, 3, 	// id_dsa_with_sha1
++	42, 134, 72, 206, 56, 4, 1, 	// id_dsa
++	42, 134, 72, 206, 61, 4, 1, 	// id_ecdsa_with_sha1
++	42, 134, 72, 206, 61, 2, 1, 	// id_ecPublicKey
++	42, 134, 72, 134, 247, 13, 1, 1, 1, 	// rsaEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 2, 	// md2WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 3, 	// md3WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 4, 	// md4WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 5, 	// sha1WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 11, 	// sha256WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 12, 	// sha384WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 13, 	// sha512WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 1, 14, 	// sha224WithRSAEncryption
++	42, 134, 72, 134, 247, 13, 1, 7, 1, 	// data
++	42, 134, 72, 134, 247, 13, 1, 7, 2, 	// signed_data
++	42, 134, 72, 134, 247, 13, 1, 9, 1, 	// email_address
++	42, 134, 72, 134, 247, 13, 1, 9, 3, 	// content_type
++	42, 134, 72, 134, 247, 13, 1, 9, 4, 	// messageDigest
++	42, 134, 72, 134, 247, 13, 1, 9, 5, 	// signingTime
++	42, 134, 72, 134, 247, 13, 1, 9, 15, 	// smimeCapabilites
++	42, 134, 72, 134, 247, 13, 1, 9, 16, 2, 11, 	// smimeAuthenticatedAttrs
++	42, 134, 72, 134, 247, 13, 2, 2, 	// md2
++	42, 134, 72, 134, 247, 13, 2, 4, 	// md4
++	42, 134, 72, 134, 247, 13, 2, 5, 	// md5
++	43, 6, 1, 5, 5, 7, 1, 1, 	// certAuthInfoAccess
++	43, 6, 1, 4, 1, 130, 55, 16, 4, 	// msOutlookExpress
++	43, 14, 3, 2, 26, 	// sha1
++	85, 4, 3, 	// commonName
++	85, 4, 4, 	// surname
++	85, 4, 6, 	// countryName
++	85, 4, 7, 	// locality
++	85, 4, 8, 	// stateOrProvinceName
++	85, 4, 10, 	// organizationName
++	85, 4, 11, 	// organizationUnitName
++	85, 4, 12, 	// title
++	85, 4, 13, 	// description
++	85, 4, 41, 	// name
++	85, 4, 42, 	// givenName
++	85, 4, 43, 	// initials
++	85, 4, 44, 	// generationalQualifier
++	85, 29, 14, 	// subjectKeyIdentifier
++	85, 29, 15, 	// keyUsage
++	85, 29, 17, 	// subjectAltName
++	85, 29, 18, 	// issuerAltName
++	85, 29, 19, 	// basicConstraints
++	85, 29, 31, 	// crlDistributionPoints
++	85, 29, 32, 	// certPolicies
++	85, 29, 35, 	// authorityKeyIdentifier
++	85, 29, 37, 	// extKeyUsage
++};
++
++static const struct {
++	unsigned char hash;
++	enum OID oid : 8;
++} oid_search_table[OID__NR] = {
++	[  0] = {  10, OID_title                               }, // 55040c
++	[  1] = {  23, OID_issuerAltName                       }, // 551d12
++	[  2] = {  23, OID_initials                            }, // 55042b
++	[  3] = {  29, OID_md2WithRSAEncryption                }, // 2a864886f70d010102
++	[  4] = {  30, OID_md2                                 }, // 2a864886f70d0202
++	[  5] = {  32, OID_id_dsa_with_sha1                    }, // 2a8648ce2e0403
++	[  6] = {  35, OID_content_type                        }, // 2a864886f70d010903
++	[  7] = {  35, OID_sha256WithRSAEncryption             }, // 2a864886f70d01010b
++	[  8] = {  36, OID_authorityKeyIdentifier              }, // 551d23
++	[  9] = {  37, OID_description                         }, // 55040d
++	[ 10] = {  43, OID_id_dsa                              }, // 2a8648ce380401
++	[ 11] = {  54, OID_basicConstraints                    }, // 551d13
++	[ 12] = {  54, OID_generationalQualifier               }, // 55042c
++	[ 13] = {  60, OID_md3WithRSAEncryption                }, // 2a864886f70d010103
++	[ 14] = {  64, OID_signed_data                         }, // 2a864886f70d010702
++	[ 15] = {  77, OID_countryName                         }, // 550406
++	[ 16] = {  77, OID_id_ecdsa_with_sha1                  }, // 2a8648ce3d0401
++	[ 17] = {  85, OID_smimeCapabilites                    }, // 2a864886f70d01090f
++	[ 18] = {  87, OID_sha1                                }, // 2b0e03021a
++	[ 19] = {  97, OID_email_address                       }, // 2a864886f70d010901
++	[ 20] = { 106, OID_extKeyUsage                         }, // 551d25
++	[ 21] = { 110, OID_locality                            }, // 550407
++	[ 22] = { 126, OID_rsaEncryption                       }, // 2a864886f70d010101
++	[ 23] = { 132, OID_smimeAuthenticatedAttrs             }, // 2a864886f70d010910020b
++	[ 24] = { 142, OID_id_ecPublicKey                      }, // 2a8648ce3d0201
++	[ 25] = { 142, OID_sha224WithRSAEncryption             }, // 2a864886f70d01010e
++	[ 26] = { 143, OID_stateOrProvinceName                 }, // 550408
++	[ 27] = { 146, OID_subjectKeyIdentifier                }, // 551d0e
++	[ 28] = { 160, OID_data                                }, // 2a864886f70d010701
++	[ 29] = { 161, OID_crlDistributionPoints               }, // 551d1f
++	[ 30] = { 173, OID_msOutlookExpress                    }, // 2b0601040182371004
++	[ 31] = { 179, OID_keyUsage                            }, // 551d0f
++	[ 32] = { 195, OID_md4WithRSAEncryption                }, // 2a864886f70d010104
++	[ 33] = { 198, OID_certPolicies                        }, // 551d20
++	[ 34] = { 201, OID_organizationName                    }, // 55040a
++	[ 35] = { 204, OID_messageDigest                       }, // 2a864886f70d010904
++	[ 36] = { 204, OID_sha384WithRSAEncryption             }, // 2a864886f70d01010c
++	[ 37] = { 212, OID_name                                }, // 550429
++	[ 38] = { 213, OID_commonName                          }, // 550403
++	[ 39] = { 220, OID_md4                                 }, // 2a864886f70d0204
++	[ 40] = { 226, OID_sha1WithRSAEncryption               }, // 2a864886f70d010105
++	[ 41] = { 227, OID_md5                                 }, // 2a864886f70d0205
++	[ 42] = { 228, OID_certAuthInfoAccess                  }, // 2b06010505070101
++	[ 43] = { 234, OID_organizationUnitName                }, // 55040b
++	[ 44] = { 237, OID_signingTime                         }, // 2a864886f70d010905
++	[ 45] = { 237, OID_sha512WithRSAEncryption             }, // 2a864886f70d01010d
++	[ 46] = { 244, OID_surname                             }, // 550404
++	[ 47] = { 245, OID_subjectAltName                      }, // 551d11
++	[ 48] = { 245, OID_givenName                           }, // 55042a
++};
+diff --git a/scripts/mod/devicetable-offsets.h b/scripts/mod/devicetable-offsets.h
+new file mode 100644
+index 0000000..c213581
+--- /dev/null
++++ b/scripts/mod/devicetable-offsets.h
+@@ -0,0 +1,148 @@
++#ifndef __DEVICEVTABLE_OFFSETS_H__
++#define __DEVICEVTABLE_OFFSETS_H__
++/*
++ * DO NOT MODIFY.
++ *
++ * This file was generated by Kbuild
++ *
++ */
++
++#define SIZE_usb_device_id 24 /* sizeof(struct usb_device_id)	@ */
++#define OFF_usb_device_id_match_flags 0 /* offsetof(struct usb_device_id, match_flags)	@ */
++#define OFF_usb_device_id_idVendor 2 /* offsetof(struct usb_device_id, idVendor)	@ */
++#define OFF_usb_device_id_idProduct 4 /* offsetof(struct usb_device_id, idProduct)	@ */
++#define OFF_usb_device_id_bcdDevice_lo 6 /* offsetof(struct usb_device_id, bcdDevice_lo)	@ */
++#define OFF_usb_device_id_bcdDevice_hi 8 /* offsetof(struct usb_device_id, bcdDevice_hi)	@ */
++#define OFF_usb_device_id_bDeviceClass 10 /* offsetof(struct usb_device_id, bDeviceClass)	@ */
++#define OFF_usb_device_id_bDeviceSubClass 11 /* offsetof(struct usb_device_id, bDeviceSubClass)	@ */
++#define OFF_usb_device_id_bDeviceProtocol 12 /* offsetof(struct usb_device_id, bDeviceProtocol)	@ */
++#define OFF_usb_device_id_bInterfaceClass 13 /* offsetof(struct usb_device_id, bInterfaceClass)	@ */
++#define OFF_usb_device_id_bInterfaceSubClass 14 /* offsetof(struct usb_device_id, bInterfaceSubClass)	@ */
++#define OFF_usb_device_id_bInterfaceProtocol 15 /* offsetof(struct usb_device_id, bInterfaceProtocol)	@ */
++#define OFF_usb_device_id_bInterfaceNumber 16 /* offsetof(struct usb_device_id, bInterfaceNumber)	@ */
++#define SIZE_hid_device_id 16 /* sizeof(struct hid_device_id)	@ */
++#define OFF_hid_device_id_bus 0 /* offsetof(struct hid_device_id, bus)	@ */
++#define OFF_hid_device_id_group 2 /* offsetof(struct hid_device_id, group)	@ */
++#define OFF_hid_device_id_vendor 4 /* offsetof(struct hid_device_id, vendor)	@ */
++#define OFF_hid_device_id_product 8 /* offsetof(struct hid_device_id, product)	@ */
++#define SIZE_ieee1394_device_id 24 /* sizeof(struct ieee1394_device_id)	@ */
++#define OFF_ieee1394_device_id_match_flags 0 /* offsetof(struct ieee1394_device_id, match_flags)	@ */
++#define OFF_ieee1394_device_id_vendor_id 4 /* offsetof(struct ieee1394_device_id, vendor_id)	@ */
++#define OFF_ieee1394_device_id_model_id 8 /* offsetof(struct ieee1394_device_id, model_id)	@ */
++#define OFF_ieee1394_device_id_specifier_id 12 /* offsetof(struct ieee1394_device_id, specifier_id)	@ */
++#define OFF_ieee1394_device_id_version 16 /* offsetof(struct ieee1394_device_id, version)	@ */
++#define SIZE_pci_device_id 28 /* sizeof(struct pci_device_id)	@ */
++#define OFF_pci_device_id_vendor 0 /* offsetof(struct pci_device_id, vendor)	@ */
++#define OFF_pci_device_id_device 4 /* offsetof(struct pci_device_id, device)	@ */
++#define OFF_pci_device_id_subvendor 8 /* offsetof(struct pci_device_id, subvendor)	@ */
++#define OFF_pci_device_id_subdevice 12 /* offsetof(struct pci_device_id, subdevice)	@ */
++#define OFF_pci_device_id_class 16 /* offsetof(struct pci_device_id, class)	@ */
++#define OFF_pci_device_id_class_mask 20 /* offsetof(struct pci_device_id, class_mask)	@ */
++#define SIZE_ccw_device_id 12 /* sizeof(struct ccw_device_id)	@ */
++#define OFF_ccw_device_id_match_flags 0 /* offsetof(struct ccw_device_id, match_flags)	@ */
++#define OFF_ccw_device_id_cu_type 2 /* offsetof(struct ccw_device_id, cu_type)	@ */
++#define OFF_ccw_device_id_cu_model 6 /* offsetof(struct ccw_device_id, cu_model)	@ */
++#define OFF_ccw_device_id_dev_type 4 /* offsetof(struct ccw_device_id, dev_type)	@ */
++#define OFF_ccw_device_id_dev_model 7 /* offsetof(struct ccw_device_id, dev_model)	@ */
++#define SIZE_ap_device_id 8 /* sizeof(struct ap_device_id)	@ */
++#define OFF_ap_device_id_dev_type 2 /* offsetof(struct ap_device_id, dev_type)	@ */
++#define SIZE_css_device_id 8 /* sizeof(struct css_device_id)	@ */
++#define OFF_css_device_id_type 1 /* offsetof(struct css_device_id, type)	@ */
++#define SIZE_serio_device_id 4 /* sizeof(struct serio_device_id)	@ */
++#define OFF_serio_device_id_type 0 /* offsetof(struct serio_device_id, type)	@ */
++#define OFF_serio_device_id_proto 3 /* offsetof(struct serio_device_id, proto)	@ */
++#define OFF_serio_device_id_id 2 /* offsetof(struct serio_device_id, id)	@ */
++#define OFF_serio_device_id_extra 1 /* offsetof(struct serio_device_id, extra)	@ */
++#define SIZE_acpi_device_id 16 /* sizeof(struct acpi_device_id)	@ */
++#define OFF_acpi_device_id_id 0 /* offsetof(struct acpi_device_id, id)	@ */
++#define SIZE_pnp_device_id 12 /* sizeof(struct pnp_device_id)	@ */
++#define OFF_pnp_device_id_id 0 /* offsetof(struct pnp_device_id, id)	@ */
++#define SIZE_pnp_card_device_id 76 /* sizeof(struct pnp_card_device_id)	@ */
++#define OFF_pnp_card_device_id_devs 12 /* offsetof(struct pnp_card_device_id, devs)	@ */
++#define SIZE_pcmcia_device_id 52 /* sizeof(struct pcmcia_device_id)	@ */
++#define OFF_pcmcia_device_id_match_flags 0 /* offsetof(struct pcmcia_device_id, match_flags)	@ */
++#define OFF_pcmcia_device_id_manf_id 2 /* offsetof(struct pcmcia_device_id, manf_id)	@ */
++#define OFF_pcmcia_device_id_card_id 4 /* offsetof(struct pcmcia_device_id, card_id)	@ */
++#define OFF_pcmcia_device_id_func_id 6 /* offsetof(struct pcmcia_device_id, func_id)	@ */
++#define OFF_pcmcia_device_id_function 7 /* offsetof(struct pcmcia_device_id, function)	@ */
++#define OFF_pcmcia_device_id_device_no 8 /* offsetof(struct pcmcia_device_id, device_no)	@ */
++#define OFF_pcmcia_device_id_prod_id_hash 12 /* offsetof(struct pcmcia_device_id, prod_id_hash)	@ */
++#define SIZE_of_device_id 196 /* sizeof(struct of_device_id)	@ */
++#define OFF_of_device_id_name 0 /* offsetof(struct of_device_id, name)	@ */
++#define OFF_of_device_id_type 32 /* offsetof(struct of_device_id, type)	@ */
++#define OFF_of_device_id_compatible 64 /* offsetof(struct of_device_id, compatible)	@ */
++#define SIZE_vio_device_id 64 /* sizeof(struct vio_device_id)	@ */
++#define OFF_vio_device_id_type 0 /* offsetof(struct vio_device_id, type)	@ */
++#define OFF_vio_device_id_compat 32 /* offsetof(struct vio_device_id, compat)	@ */
++#define SIZE_input_device_id 160 /* sizeof(struct input_device_id)	@ */
++#define OFF_input_device_id_flags 0 /* offsetof(struct input_device_id, flags)	@ */
++#define OFF_input_device_id_bustype 4 /* offsetof(struct input_device_id, bustype)	@ */
++#define OFF_input_device_id_vendor 6 /* offsetof(struct input_device_id, vendor)	@ */
++#define OFF_input_device_id_product 8 /* offsetof(struct input_device_id, product)	@ */
++#define OFF_input_device_id_version 10 /* offsetof(struct input_device_id, version)	@ */
++#define OFF_input_device_id_evbit 12 /* offsetof(struct input_device_id, evbit)	@ */
++#define OFF_input_device_id_keybit 16 /* offsetof(struct input_device_id, keybit)	@ */
++#define OFF_input_device_id_relbit 112 /* offsetof(struct input_device_id, relbit)	@ */
++#define OFF_input_device_id_absbit 116 /* offsetof(struct input_device_id, absbit)	@ */
++#define OFF_input_device_id_mscbit 124 /* offsetof(struct input_device_id, mscbit)	@ */
++#define OFF_input_device_id_ledbit 128 /* offsetof(struct input_device_id, ledbit)	@ */
++#define OFF_input_device_id_sndbit 132 /* offsetof(struct input_device_id, sndbit)	@ */
++#define OFF_input_device_id_ffbit 136 /* offsetof(struct input_device_id, ffbit)	@ */
++#define OFF_input_device_id_swbit 152 /* offsetof(struct input_device_id, swbit)	@ */
++#define SIZE_eisa_device_id 12 /* sizeof(struct eisa_device_id)	@ */
++#define OFF_eisa_device_id_sig 0 /* offsetof(struct eisa_device_id, sig)	@ */
++#define SIZE_parisc_device_id 8 /* sizeof(struct parisc_device_id)	@ */
++#define OFF_parisc_device_id_hw_type 0 /* offsetof(struct parisc_device_id, hw_type)	@ */
++#define OFF_parisc_device_id_hversion 2 /* offsetof(struct parisc_device_id, hversion)	@ */
++#define OFF_parisc_device_id_hversion_rev 1 /* offsetof(struct parisc_device_id, hversion_rev)	@ */
++#define OFF_parisc_device_id_sversion 4 /* offsetof(struct parisc_device_id, sversion)	@ */
++#define SIZE_sdio_device_id 12 /* sizeof(struct sdio_device_id)	@ */
++#define OFF_sdio_device_id_class 0 /* offsetof(struct sdio_device_id, class)	@ */
++#define OFF_sdio_device_id_vendor 2 /* offsetof(struct sdio_device_id, vendor)	@ */
++#define OFF_sdio_device_id_device 4 /* offsetof(struct sdio_device_id, device)	@ */
++#define SIZE_ssb_device_id 6 /* sizeof(struct ssb_device_id)	@ */
++#define OFF_ssb_device_id_vendor 0 /* offsetof(struct ssb_device_id, vendor)	@ */
++#define OFF_ssb_device_id_coreid 2 /* offsetof(struct ssb_device_id, coreid)	@ */
++#define OFF_ssb_device_id_revision 4 /* offsetof(struct ssb_device_id, revision)	@ */
++#define SIZE_bcma_device_id 6 /* sizeof(struct bcma_device_id)	@ */
++#define OFF_bcma_device_id_manuf 0 /* offsetof(struct bcma_device_id, manuf)	@ */
++#define OFF_bcma_device_id_id 2 /* offsetof(struct bcma_device_id, id)	@ */
++#define OFF_bcma_device_id_rev 4 /* offsetof(struct bcma_device_id, rev)	@ */
++#define OFF_bcma_device_id_class 5 /* offsetof(struct bcma_device_id, class)	@ */
++#define SIZE_virtio_device_id 8 /* sizeof(struct virtio_device_id)	@ */
++#define OFF_virtio_device_id_device 0 /* offsetof(struct virtio_device_id, device)	@ */
++#define OFF_virtio_device_id_vendor 4 /* offsetof(struct virtio_device_id, vendor)	@ */
++#define SIZE_hv_vmbus_device_id 20 /* sizeof(struct hv_vmbus_device_id)	@ */
++#define OFF_hv_vmbus_device_id_guid 0 /* offsetof(struct hv_vmbus_device_id, guid)	@ */
++#define SIZE_i2c_device_id 24 /* sizeof(struct i2c_device_id)	@ */
++#define OFF_i2c_device_id_name 0 /* offsetof(struct i2c_device_id, name)	@ */
++#define SIZE_spi_device_id 36 /* sizeof(struct spi_device_id)	@ */
++#define OFF_spi_device_id_name 0 /* offsetof(struct spi_device_id, name)	@ */
++#define SIZE_dmi_system_id 332 /* sizeof(struct dmi_system_id)	@ */
++#define OFF_dmi_system_id_matches 8 /* offsetof(struct dmi_system_id, matches)	@ */
++#define SIZE_platform_device_id 24 /* sizeof(struct platform_device_id)	@ */
++#define OFF_platform_device_id_name 0 /* offsetof(struct platform_device_id, name)	@ */
++#define SIZE_mdio_device_id 8 /* sizeof(struct mdio_device_id)	@ */
++#define OFF_mdio_device_id_phy_id 0 /* offsetof(struct mdio_device_id, phy_id)	@ */
++#define OFF_mdio_device_id_phy_id_mask 4 /* offsetof(struct mdio_device_id, phy_id_mask)	@ */
++#define SIZE_zorro_device_id 8 /* sizeof(struct zorro_device_id)	@ */
++#define OFF_zorro_device_id_id 0 /* offsetof(struct zorro_device_id, id)	@ */
++#define SIZE_isapnp_device_id 12 /* sizeof(struct isapnp_device_id)	@ */
++#define OFF_isapnp_device_id_vendor 4 /* offsetof(struct isapnp_device_id, vendor)	@ */
++#define OFF_isapnp_device_id_function 6 /* offsetof(struct isapnp_device_id, function)	@ */
++#define SIZE_ipack_device_id 12 /* sizeof(struct ipack_device_id)	@ */
++#define OFF_ipack_device_id_format 0 /* offsetof(struct ipack_device_id, format)	@ */
++#define OFF_ipack_device_id_vendor 4 /* offsetof(struct ipack_device_id, vendor)	@ */
++#define OFF_ipack_device_id_device 8 /* offsetof(struct ipack_device_id, device)	@ */
++#define SIZE_amba_id 12 /* sizeof(struct amba_id)	@ */
++#define OFF_amba_id_id 0 /* offsetof(struct amba_id, id)	@ */
++#define OFF_amba_id_mask 4 /* offsetof(struct amba_id, mask)	@ */
++#define SIZE_x86_cpu_id 12 /* sizeof(struct x86_cpu_id)	@ */
++#define OFF_x86_cpu_id_feature 6 /* offsetof(struct x86_cpu_id, feature)	@ */
++#define OFF_x86_cpu_id_family 2 /* offsetof(struct x86_cpu_id, family)	@ */
++#define OFF_x86_cpu_id_model 4 /* offsetof(struct x86_cpu_id, model)	@ */
++#define OFF_x86_cpu_id_vendor 0 /* offsetof(struct x86_cpu_id, vendor)	@ */
++#define SIZE_mei_cl_device_id 36 /* sizeof(struct mei_cl_device_id)	@ */
++#define OFF_mei_cl_device_id_name 0 /* offsetof(struct mei_cl_device_id, name)	@ */
++
++#endif
+diff --git a/scripts/sortextable b/scripts/sortextable
+new file mode 100755
+index 0000000000000000000000000000000000000000..c32137e9676efa95392441405a8e534a8f4c4773
+GIT binary patch
+literal 18397
+zcmeHPeQ+GbmGAws*2e6tjTdB_v&Ur3$s}GZV~p%z*tI@9B5TkY`6G$VN|siZg0xch
+z1Dlu+<s=bJlqDjSBd&y0bafoz?zk&oF6FOqSc?TBxm-#lfpCNb;e%w?#@NS)5hO78
+zdp+IK>`Hr;x~i+XKh&z3*YDTwy?*_syJxo5Gxt}AYwR`~lgZ9*V#LkAEXX1A%-DE2
+zX9ZTl=CUAL#+I@<KwLP2yo9KklXOCumeeie9H34d6?PM-um^cY(ko4vNh&=gO7%^p
+zpvamuxy)oGWlZG&>5;GA0B1oPct+A8;m063#god<1e0Ew&?^&ql8y<-B$e$WGj!Ao
+zyY==UIO2muSQS4{QCV%>8_8zMH!Lv)8kPikM$!=zW|B(1zknY3`KKnY5Zor}D;Adv
+zqJ5GImR;N4ws-xyYulSwx3|So2UZ`bSigGxx<H~cu$H%*?33)4TetI?WE@Muk<W{8
+zP#>W3%%h7w+_&*(|M-Ke&)L5)IQR8=Z#%zA@(Xd04c;!ZVjfMxH@rO{y9T)FX+I#6
+zD@-c^%!FT41aB{b_ZGovn9O9qq6mI(5&U7`DvrXm8^BEVDate9bRA~G<3(^9J~PQ*
+zQUs3{!GlHcTY)cNi`np+2ILr%<AtF=HBt9j&!Pv~k}MKw?~LvHLPuAmsr63Q6^+L`
+z<E*2jv5R#?I}*_(k*1C=7C|0TkZ<XVx5bhzTt1O(h6d|M#Yh8X2NKD~Bx~6pZ%am5
+zQ+sD3$~wEEG4{noXFSOg$vC$aAtxdbjVB`=jcqY#?(67`2_(X{gljifM%D(d3#^;W
+zmzPgw*9NXfi|hq|CgPYxoybwYcJRI}$6<1D+gutMe~U809(w3ubbAN;XThhIP`RBw
+z37*o#wGEuo*g(N#l5wRu(s~_BMZ8OZn?uP|Q7t$hT*6YB1*dT;(;5pd=N>Anu;5g;
+zOhF57ou4!dPCm(0XTc}?1`2msaBF)TEciTW1hmzHQ{R=T%Yx6BAm{-LeyIiTw%{HM
+z-fzJb3qEMU<+Y{aLl%62MPBQ9)2$7-I?7b0^$jOo+3%oG>ltyMGKGxm_oB#H*^INY
+zJcu0etyGvBH;`6-j(EDHxiQXfBc3j0ZkY485KosdcbM~=iKk1K8{+&%;^~s*206c$
+zc)C=%Zq8prJYAw(7w4}co-R$Uf%8j<pG$ll=NA%Bmm(MB{5<0666Dr!-cCG)KBsd2
+z!#@X4A<ua^|2FXy>Kx<z8R99#xeFfySb3Uw3T<v2d}wEAM`(Mfe*5j(m)|@Fw8yY1
+z4=#m2TDr#FbKX8$<qrd9n(p*#>8g*tnqK7(Y6DLHNwvIzX#*&!^1HJR*zTFIDZM{I
+zEPE#GO7BC+^bIS$!=T#0rf;BLZ6NG-pQu<IWKU7V%ZIb=P&-Na>}KS&o_qWx^@zV4
+zkkb1d@&ni!<hw=Qi~J7C4?tGy8TA^z{V*LKNcz3{Gn(x;wdwnSHF4}7e^*E!skObb
+zwa-v`TM+iJ{yvlz8NSUVp#NTfHe~!t8+g*+j~cZ;BdKUj-}D~>Q+_e~)<^JZpvu3d
+zy8QKUx^+=F-Q_*&rhZi0Ghz$t=MCQ<u2xwl>#W@{qV$x^;r0#R?*NAM(Xc*VYkO78
+zj5}*>qao$U&iOs3mF^F1sZ3Zm4Bs%Mw5Exts+R<rW;>r9Lv4M-sYh$m_j?TAw^6Db
+z&1!d^E7KfL_=m{7^u1`Ajsl1{L;5p@?;c*$2ukK}wY_Qh+QI9?<wotQkz3O1K4JJO
+z0c7W(f3zset6-wX>BoSfOSr-5SNg6)A1EJ2h{H_zt6}ZSBh&{zzbCXiv?p{&C~~R?
+zm)~~w#}sUL`S4RTE=FD7L+Eg|3~kiak1VB8*8|A$3;9{z4E>buItWPV-&w-g3AVO@
+z>Cc*1+RX)&{+m!R;QBcnT*)plwuyD)n)lrRR2#Vd7l5nFe;m?ZDmRXk-4iqhv*ABd
+zFPShj{gl$X6r#!z&86usC#vfH0NrmXWV=7GD}AuY;NZ@cDyv%*q-+(kU1qixS!QOJ
+zk${g2T!L)3ne~zYvL~EmM*r=}d(mmL9@LI5-ItmJFntgg<6ZRE7V7SOjljAO&ao+d
+zJ9+7y3pMH=zkonm`>3VogHJ18=|RacYK-=aaZS%?$kR-~+*)5o>H9tv98+<ogP`7R
+zWC}yD3jmt>87FUJ2BDxf_Vxe`<6^o`JO%g8&NK7JN`r{trWL4J4l@@V&jvAzAPm*O
+z$IP~`MfQT3y#d*7GdmyIaWf1bd_raHa+n)+eT?iN&|D5(hWj*zg4{mp2kC?B3||fc
+z2t`ood)9@D(g!yhz85C3ADCDfMpAV-I{&|+M6<mFv70muTfNu+I2vR4{sy>mbQptX
+zj+Va1RciSD+LRpa^*;g$N*eNmW|q%Bty;SBMslgtEUofa$V?f}V1}yG^xgggXLl*f
+zy9vTHVEAr^<(>(r()&+9PW~PtJWiJbmzzdN#XFCkJa55jl`8nj@vu_e?k@{r4$yj@
+z35InrG(zeO-|JU#_d}Qt(ucUM^Wk*LS*xEjd}AonnqJZzyZx;vUm?pht)sSg9)ml|
+zH=b6$HN0v}d1|<CnCdUBR;vD}iAoWNhoIgwF<0rM`vM01rwreHfT}i3D1A4Z5Tp`R
+ziKEJY01_&Nl>%k>b^``O5zH+lVGQ{)^b*8G>0O6TPCx~w*2N-Uiu`#8aI~uoGbT)z
+z!Uj#VrCRz^4$QKETpYqI8&3Nje2!fW9dnLVF%PbQhGmW=Unb{R@&$A3S0~^Nh1;BC
+zRm`!aXXh)+dr{1$=GpJ8K)a6r!{3`pd;c{pa|W~SFO{B$AjU7}0f>Aiy{H-8DxAJ?
+z3={4aXV18Dqb+ru&$o4C!ZP1Bpk~ask6<#LWB9J2(t#&<H<TUF_6(wkW-dcnE$$=f
+z``w0b0Wmh3axwm$#H<=AH_X}g1yyCa^oP_Uy3;XSWQ@db0hJ^1AS%rs!Ni50UuO7z
+zh$0M{bxPkuc8&!M-;jxwDSh{vm?{U&gDBC5p}CfZjyY_G7+v3Xl#thV4wuoefoFTU
+zEJg}-LrOGi`pqmKc^EHV6UPmXXVAGDFqGENP*P3Ayc1Km-*vWLS#Acp1g49Rn>9to
+z4RAhgR55PKXxymOzjhhECzel*n~U!we)`n7IfODXZW{iCapSd)8wBFBP`8eoD-B-_
+zAnUk+)OCOmT1T(H8!gAhT||S2;$`@*pfWR%xl3vA3|u<0Ol2pQp_E_OlZP<nW(P0Q
+zy)<`}cj$ZkUh_HQWk_bSj^kd;mM3U>(VxYT$R^%1j9f3Z6agrOD2B^Xh-!G4I9^Ax
+zbaAw%3nW}a!at&0AMaLwiEfp9ls}u`ww#?nX|{>xS6&*X(g#pF>UtZF+sF(rXr_V=
+zQllHwMpVY{7s}D+P7G1eb05eGRxJTr$t$34JdW1o)=jcrDqT6rzE8TBgDpQ-t3Q8-
+zrk~b&UcXRRUpqS7O?RTvjF*$qVK;*GqjwGC-IjnH-^Y&P!G628`Y;IY>mE&iW50dR
+zsbg@OKhVFs=Oh&w<6_=EMx2z-OgJE~=}%)WxLLD}Y0pojpnSqq{(17<JsO@lxc+IO
+z-@R$UpQ((c7Ho%R_C8$9J<qy6z7k=2=M+8HX+4{?B@jq1n{;8(_LC}BtsrlV?a3X4
+z3dTV$VN&Ht37+e0%8}b#nbY3Pc<J0R@Q%!DUY@aMPP=)=i5r@lIbAyUClD>+=Q)|z
+z+;e}T%^f?{G8GSD4~AgQv}G}LYEU_H1*SC{Hw%aHOt8g;3g^Ho>VgBJI_W?O)k!Yd
+zOb1Y-azx?v!%4U^t^O@&%uYKD2?wq)z2J7JerhbNq8_SW(<jhlRsCs9KAAJ#{u+n=
+zeE$xc{<J>Pk~!m6jvAS)w||GdC6jaOPxsfjOuQwNb@zMvcR2fN<^=oiD}gC<zSk#A
+z6@U(sw^`&b@2{~VR+J|Dk3IoO8#gzn(4YPqClzqFP_Og_72ZU?!CFh^yqoLpC?PZO
+ze!6|>4|L9(I$8Im@F2H!o&%^ph_0!>cRT$kHGHq3AL*y~SbGuK@*i(FbpoBnP`;H>
+zDxas{sGrxz_Lvn;w#TCXcTmD(E;sO9Za^z)VJ7{?srq;1)&ISWvb9+K_&un<KlzhT
+z{{uCp@1pYHH!!BsHJCX*%4F@~bn{o7;`apR>4EEiyO@6O{KoK|Lq<QN>2Kk=$hqp}
+z^o`z-@nU$x8>wG~GKS;$pqvA1o8H&-SF^DTh9T{|stv4u80v=aaWe8UJ%#n0a#pQ6
+zvuaEqHC_mB_|MdT@Tg7wI!V`*^j(~?TBT?c775fCx&t+ZA~_c-;=g|eT&EEWtQ2?#
+zHobyeZYeLpxTkf5P5%lAKRzg4*)O7GVAD}TaIJE0pNFr5B$qvkt7y*q^b<I{i<>a}
+zFU8LY?Wol+hPK!0FNEsD>6KZZihhw^P4xEgsyE7itz|xPa7&wDRO>sJTqgT}SU(fi
+zFIK^ZvFH`F-==Lin>u4@6#Xc(^#6BGG1GUrh%9D%JTf4q5{>(!8&z7KiylZe?ro2%
+zcXjZk=0G5T)rC|n9&PH}7i;@cv{}XfFx2M8WTP65HFY+(#rCNyn>VT}6Vv4CBh|aA
+zE7g{^cG%|Su}+m%`XZu|2vrz~MWf9yo4C7UZ)dyO7E`Sn+&zY+#%Mg&*sk)GNz+)Y
+zGpRPJ@#wx(dt=<9QrVemZ&s<47BDRZ_rvjmmRLOG4(7EpidD&`*0xv_?VDaoQD|y!
+zOeAD!1g(nj*s%cGf*fcvP87`+*@EWr0xmnfV9H)WS+NKrRJNs#Pmh3Jfg^a%Fub^(
+zH@syS4S39c0uLJFz=v?(t^j@kv<}pZ=TBPEQbD^xyFd?t4uT#A9Rht0^aAKOsQL%P
+zm;hY^>P7eI1}y^}0u6#52HgdE0kj)*4IV@u2kinK1Fgfoe+~Q@q(=hK!=Q&jRs2w#
+z0Hw6ZB+T}uZOnGSYg;<M#64&$@e+O|juAWwT_a?O%q-8CA7vz8_NHN|@R@nMHJ;L2
+zluP!zyV=c4K7Gw~{;Pm;{VGs;#;+zoB(l33$06X$B?wA*62}m5>-r_(U&BH2g?1hV
+zJ~o4$CxO2-gPmUrc@0!1vi~LyH?G|Z34#*tq-z7b(4Q-TmjVwJ$gcxl2b>;DWg<Ia
+z;Jbj&mmny`v02EkB|PNuK47o%l=e8PJZiJ26nv$}&E>uZxmM_}n<m$iC-+0hbwlod
+zvPZFh1#*WV_iM7Z+2j4Xz1maypkuQ~O*=Px%D(0bdDc8IC*-N<DcRx)+P^-}QvoF8
+zDTBmjPboAud)%Q*cILx19&feBP3^rAeX<mN`zEr#+vDAXb`VbgOAG=pCA`YRfBb}z
+zZ3jMa#xTN|?@WJCOEG^g*c?uK5s%0$jwi_;+80IM(!OeHUp2K)qxNakzO9~Mdww&_
+z)|uCz#t{64x!E)uf!PSmMqoAqvk{n$z-$C&BQP6**$B)=U^W7?5txm@|Dy<uT^8it
+z92Qi%h9wW4B$aD1-6cVe%Qc=}{Hu)8Vt%Im)(t$jRPgi<L`q9c!b(Lst%*^R<?nrL
+zbP|8a9wfqC{LEOtGstt;SHjb<J;*67eNcMNB#d?@P~vMPpgzt`oy4*p76ThNDAy=x
+zoskl)w@|`Ax_P4YOG;T+kW+~t6TI}B|05a_*x<#JtRG8>ygdhmJXYX2FXM?Nc+S^}
+za-sfzPUJrJ!itWF>-wyqFADlQK`#nA#~tLVmkWBepz8&#5p;*3ErQ-9=mUa2Ea+o`
+z9uc(AuPv388`ZMydsDGwN?jMI2&`RQz9Gfg@>M3lrmc1d60Kt0JHXfNyI26L@zFqN
+zbM5M6<37Rdi=_g4Q*GGN-qy?l#I-giT3Mj^?ig0jO`43GC3i*RiMGyI9uq-XJlft!
+z3L@9lo@A&J`<VmuZwwY_0fVwm`fmjbL|Y>*@y3p5q_r8kk~1|Tjq!Nn-KK`jf1wFt
+zu-@3w)`Y4%VGySPuf?>uH<4h0rp}IzXe?P6y8jhV<CglU93K_-Ah@abHsrYFAWpJB
+zOa2qc&{&cB_4XjRsrMpO&P|=1Q(2xX$Jwf%v<Eq!6b5M>*qRFUX+0C$8aieDay~g!
+zpzjh!<T#c#X}>znB~pLb9t6kOumI@)5R_;>qO8=H<9-J)nro!KoWJ^oqjJ822v3Fa
+zy8|fA6;fZ$4|T%ftA(EQU&={(C(3E=k-VIL4hV&y&@c2~!0b!NkgHN(&UeRzzMSu5
+z{e|uCEzp<qXI3c4`IcC^rxfZx2#jJP=X-g->84JBB<~|8XZkAhM0Ffi{h^W|!E8wA
+zs|5k)i|Qzs^qa_A^=S_XrD5Ud(+X!NPf||;-$ur&FYk}NqJzl$gp?QELb7Z~=*##I
+zmIis*pwRzWf&VgoTnMMfagd1Am+uiZh`^0VK|u@aKT@Dywlv5k%ft;mJb5EE4HVWt
+z445`^OELL8Am2AClrQ9e3SA1Z)R)f-r2&9Qh4O{`OOT=VOMTi2LrMJ;^?w6d>U&aO
+z-Y@0*U}GZwvVY3@Wk2{GbglKv_ckW3MFEnOH@PWZ;%8A{)tApJY>lZgBozgfdXl~i
+z+^Rn$o_B_XzVuU?k$RH<5E;T``-g@8VWB@R+Arl*nGw_gB@rP$St|AYlZcs-<|JJJ
+zSk`S7{iQJImV%<NfaP_|zHilU*kE!M^Gy0@Ah+O<?U(a6jnA3tKU8VzRTm7H!un0A
+zna}hFP=!4>t&rXolJ`k#p#z@C`(HlpoP18s$6dHj1+5UzJJ6%$eaKqqz@1j!U-EG`
+zllP5$d@hssgM576<a2U9ehHKFcRoHJ^KsA$@w|gwig|V>+{5HNYE^PzrjYYvKJLZ)
+zlrz~`z~p?EFTZf|cS}Bg+2rq)e0&k+lLjlq^A7y#kn@GL(7`UBe19t+$FB@AzVh)>
+zCdX|)KJ^}5J}xGA3rPLa$^MImV_u@U)s8sR%LJ6F`PuyaLpZ&9KuPX3pm9Msy@x;v
+znmp0?A)L10Q<8SBLY{Eiuun<axf*%GY4<)QY3Gy36Hf0gP}2C>oIePsHytRg;Ah6x
+zffC*=aA}8zH{rD7pHhgQ8QyL-ae6<1lH6;s8F^ms<w1h^vk1{GI0&cRuax-S0MO6j
+zu+gtvY@nhf=MCB)K=QN$mJ<0#sS^juy9?ywz`36V_UXBW@G*h&y#~O(E9_)NKaur*
+zPsks>B8Z&XPNLt(LG>P5+dwRTmLvKvI0%2F06!t{L4iyA^qj!kEAT<^ltyuopBF^E
+za^8F%ILXrnGfL0#Gxn8$5<XGjKednW@dEs}0>4mzzXp7!{`@AFpFSQx08V}eFAE|!
+zl{^?2gm)F-D+FG+4sru<^7A?24_KaRI6i%T=n!_~x{9p%ZZ1E4o_P%dGqsDJlWll&
+zwrg2Xn&9*?j!$nd70zVm2au;XL*;W6ag<JRJJaW@p9*>T+-6EM_9~aZV%mK59`J>T
+zC+(c3B=5a0WK@pipH^^u`uz4O;0yCbId?N~FIIJEQ?xbJaQW%?g>Vr&cND?nMex2N
+z_@hPeV@2?P2TuMM&gU-|k$(%gYHg^<e*}Diy_7v(5QlkqSXp4X56Z`r#lY#h&{lRz
+zQGRA@6~_f*AvXi}qMr|m@h*$1gdO>P2#J42$QNFhoki^5DeTDmJKwtmV_ik$zgh%;
+zqzKOU?@8w@bfk#<i$(A=z$wm!?YdY*egOimTI!S8PXb?vm4w3QpK{<cz7KEN`5I_q
+z@ru1s7N=t^ohsUKqGK&i`>AX{9aOfT%J$PiWmpR8YK%uGx3^xmmc^%m>({~JBuYzI
+z$+o+qV&^E|5L<xl$1C*F##jn3<6}c>q@@x2X`5L~Gq$I8u_zX^B26j0exKOOs3=0)
+zZ5dwDkH+qT$8ZczvZi=4kxXGHa1-9Lzol|pBwTxYeI&y0;(l~rTLQalBgu{kUe%99
+z6Kn=35^3&?>}&7b+t?myPIkr<k;c>k-iY>SGTIzizu|_pusnkh{E4-hOKK4;lg005
+z<|15ks-xp>`d9#8lH**2*6#8|BaxbIp{>=C>RYSetm(PT=Lt8nNY!U=4Q;Khgp{R(
+ze_en@wuEon912HntEsuYx;|1L+8nMXbNmAYO^Foukwt3jw??J{Qops5!ckAVp&70B
+znI9%FKVlFJ%C8g9X9yxuz8+|rp^KDXY<@!_ALCy|$cKbKQy)agFE&5HkdKM)F%*Ci
+zi?`;-777LOzO#VKmgtPMHpZIK&`9lVXeV}cM^Xv&GE0mos^HC!I}{j<#vm$U9l@%o
+z$eUk;$d?sgda!(NVye8noPQ@`3ZUScU!%y!BDdTX*(N$}C2hh+ucZ%J<V%?!pvcD}
+l5nR{F{$%-z#grI*Z-Vy)IS%rA0`Fb;h6R1{VoHY`{cq(mUxfew
+
+literal 0
+HcmV?d00001
+
+-- 
+1.9.1
+
